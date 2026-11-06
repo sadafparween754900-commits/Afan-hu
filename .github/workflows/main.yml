@@ -1,42 +1,197 @@
 
-name: Free 2D YouTube Cartoon
+import os
+import math
+import wave
+import subprocess
+from pathlib import Path
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "30 13 * * *"
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+from gtts import gTTS
+import imageio.v2 as imageio
 
-permissions:
-  contents: read
+OUT = Path("output")
+OUT.mkdir(exist_ok=True)
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+W, H, FPS = 720, 1280, 20
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+STORY = [
+    "एक जंगल में चिंटू नाम का खरगोश रहता था।",
+    "एक दिन उसे एक छोटा पक्षी मिला।",
+    "पक्षी घायल था और उड़ नहीं पा रहा था।",
+    "चिंटू ने अपने दोस्तों को बुलाया।",
+    "सभी ने मिलकर पक्षी की मदद की।",
+    "सीख: हमेशा दूसरों की मदद करनी चाहिए।"
+]
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+def get_font(size):
+    return ImageFont.truetype(
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        size
+    )
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          python -m pip install --upgrade pip
-          pip install numpy Pillow imageio imageio-ffmpeg gTTS
+def draw_scene(t, text, scene):
+    img = Image.new("RGB", (W, H), (135, 205, 245))
+    d = ImageDraw.Draw(img)
 
-      - name: Run cartoon script
-        run: python main.py
+    # Sun
+    d.ellipse((540, 80, 650, 190), fill=(255, 220, 50))
 
-      - name: Save generated video
-        uses: actions/upload-artifact@v4
-        with:
-          name: cartoon-video
-          path: output/
-          if-no-files-found: error
-          retention-days: 7
+    # Hills
+    d.polygon([(0,700),(180,450),(360,700)],
+              fill=(80,160,90))
+    d.polygon([(250,700),(500,430),(720,700)],
+              fill=(60,145,75))
+
+    # Grass
+    d.rectangle((0,700,W,H), fill=(65,170,80))
+
+    # Tree
+    d.rectangle((80,550,120,800), fill=(110,65,35))
+    d.ellipse((30,440,170,610), fill=(30,125,55))
+
+    # Animated bunny
+    x = 350 + int(20 * math.sin(t * 2))
+    y = 780 + int(10 * math.sin(t * 5))
+
+    d.ellipse((x-70,y-130,x+70,y+70),
+              fill="white", outline="black", width=4)
+
+    d.ellipse((x-45,y-250,x-10,y-100),
+              fill="white", outline="black", width=3)
+
+    d.ellipse((x+10,y-250,x+45,y-100),
+              fill="white", outline="black", width=3)
+
+    d.ellipse((x-45,y-190,x+45,y-90),
+              fill="white", outline="black", width=3)
+
+    d.ellipse((x-22,y-155,x-12,y-145), fill="black")
+    d.ellipse((x+12,y-155,x+22,y-145), fill="black")
+    d.ellipse((x-7,y-130,x+7,y-120), fill="pink")
+
+    # Bird
+    if scene >= 2:
+        d.ellipse((520,620,600,690),
+                  fill="yellow", outline="black", width=3)
+        d.ellipse((565,635,575,645), fill="black")
+        d.polygon([(590,650),(625,660),(590,670)],
+                  fill="orange")
+
+    # Header
+    d.rounded_rectangle((20,20,700,120),
+                        radius=20, fill=(20,60,85))
+
+    d.text((360,70), "CHINTU CARTOON STORY",
+           font=get_font(30), fill="white", anchor="mm")
+
+    # Story subtitle
+    d.rounded_rectangle((20,980,700,1190),
+                        radius=25, fill="white",
+                        outline="black", width=3)
+
+    d.text((360,1080), text,
+           font=get_font(27), fill="black",
+           anchor="mm")
+
+    return np.array(img)
+
+def create_music(path, duration):
+    rate = 22050
+    notes = [261,329,392,329,293,349,440,349]
+
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(rate)
+
+        samples = bytearray()
+
+        for i in range(rate * duration):
+            t = i / rate
+            freq = notes[int(t / 0.5) % len(notes)]
+            value = int(
+                1000 * math.sin(2 * math.pi * freq * t)
+            )
+            samples.extend(
+                value.to_bytes(2, "little", signed=True)
+            )
+
+        f.writeframes(samples)
+
+def main():
+    print("Hindi voice generating...")
+
+    narration = " ".join(STORY)
+    voice = OUT / "voice.mp3"
+
+    gTTS(text=narration, lang="hi").save(str(voice))
+
+    print("Checking voice duration...")
+
+    result = subprocess.run(
+        ["ffprobe", "-v", "error",
+         "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1",
+         str(voice)],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+    duration = max(20, math.ceil(float(result.stdout)) + 2)
+
+    silent = OUT / "cartoon.mp4"
+    music = OUT / "music.wav"
+    final = OUT / "final_video.mp4"
+
+    print("Creating 2D cartoon...")
+
+    writer = imageio.get_writer(
+        str(silent),
+        fps=FPS,
+        codec="libx264"
+    )
+
+    try:
+        for frame_no in range(FPS * duration):
+            t = frame_no / FPS
+            scene = min(5, int(t / (duration / 6)))
+
+            frame = draw_scene(
+                t,
+                STORY[scene],
+                scene
+            )
+
+            writer.append_data(frame)
+
+    finally:
+        writer.close()
+
+    print("Creating background music...")
+    create_music(music, duration)
+
+    print("Combining video and audio...")
+
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-i", str(silent),
+        "-i", str(voice),
+        "-i", str(music),
+        "-filter_complex",
+        "[2:a]volume=0.12[m];[1:a][m]amix=inputs=2:duration=first[a]",
+        "-map", "0:v:0",
+        "-map", "[a]",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-shortest",
+        str(final)
+    ], check=True)
+
+    print("SUCCESS!")
+    print("Your cartoon video:", final)
+
+if __name__ == "__main__":
+    main()
+    
