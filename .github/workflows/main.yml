@@ -1,5 +1,5 @@
 
-name: YouTube Cartoon Automation
+name: 3D Cartoon YouTube Automation
 
 on:
   workflow_dispatch:
@@ -10,10 +10,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -21,23 +21,23 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install FFmpeg
+      - name: Install Blender and FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y blender ffmpeg
 
-      - name: Install Python dependencies
+      - name: Install Python packages
         run: |
           python -m pip install --upgrade pip
-          pip install numpy Pillow imageio imageio-ffmpeg gTTS
+          pip install gTTS
 
-      - name: Run Python script
+      - name: Generate 3D Cartoon
         run: python main.py
 
-      - name: Upload cartoon video
+      - name: Upload 3D Cartoon Video
         uses: actions/upload-artifact@v4
         with:
-          name: cartoon-video
+          name: 3D-cartoon-video
           path: output/
           if-no-files-found: error
           retention-days: 7
